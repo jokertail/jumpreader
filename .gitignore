@@ -1,0 +1,7 @@
+/data
+/output
+/.ipynb_checkpoints
+/result
+/.idea
+__pycache__/
+*.pickle
