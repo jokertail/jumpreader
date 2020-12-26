@@ -70,7 +70,7 @@ def add_train_args(parser):
                        help='Directory of training/validation data')
     files.add_argument('--train-file', type=str, default='demo',
                        help='Preprocessed train file')
-    files.add_argument('--dev-file', type=str, default='dev',
+    files.add_argument('--dev-file', type=str, default='demo',
                        help='Preprocessed dev file')
     files.add_argument('--test-file', type=str, default='demo',
                        help='Preprocessed dev file')
@@ -248,6 +248,8 @@ def cache_emb(args,mode="train"):
     logger.info("loading pretrained infersent model")
     model_embed = torch.load('infersent.allnli.pickle')
     dicts = []
+
+    # batch segment
     i = 0
     bsize = 512
     while i < len(sentence_dict):
