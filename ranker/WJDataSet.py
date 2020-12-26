@@ -19,9 +19,6 @@ class WJDataSet(Dataset):
         for ex in exs:
             question = ex["question"];
             q_token = word_tokenize(question)
-            for w in q_token:
-                if w not in self.word_dict:
-                    self.word_dict.add(w)
 
             for p in ex["ct"]:
                 p_token = word_tokenize(p)
@@ -30,9 +27,6 @@ class WJDataSet(Dataset):
                     "p_token": p_token,
                     "label": 1
                 })
-                for w in p_token:
-                    if w not in self.word_dict:
-                        self.word_dict.add(w)
 
             for p in ex["cf"]:
                 p_token = word_tokenize(p)
@@ -41,9 +35,6 @@ class WJDataSet(Dataset):
                     "p_token": p_token,
                     "label": 0
                 })
-                for w in p_token:
-                    if w not in self.word_dict:
-                        self.word_dict.add(w)
 
     def __len__(self):
         return len(self.examples)
@@ -66,9 +57,6 @@ class WJDataSet(Dataset):
     def lengths(self):
         return [(len(ex['question']['str']), len(ex['ct']['str']), len(ex['cf'][:]['str']))
                 for ex in self.examples]
-
-    def get_word_dict(self):
-        return self.word_dict
 
     def vectorize(self, ex):
         question = torch.LongTensor([self.word_dict[i] for i in ex["q_token"]])

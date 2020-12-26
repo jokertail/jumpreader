@@ -20,7 +20,8 @@ import heapq
 from collections import OrderedDict
 from torch.optim.lr_scheduler import LambdaLR
 
-from ranker.utils4WordJump import load_data
+from ranker.utils4WordJump import load_data, load_glove
+from run import set_seed
 
 logger = logging.getLogger()
 os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
@@ -179,9 +180,28 @@ def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
     return LambdaLR(optimizer, lr_lambda, last_epoch)
 
 
+def train(args, data_loader, model, global_stats, scheduler):
+    for step, batch in tqdm(enumerate(data_loader), desc="training"):
+        model.train()
+        torch.cuda.empty_cache()
+        inputs = {
+            "q_seq": batch[0],
+            "q_mask": batch[1],
+            "p_seq": batch[2],
+            "p_mask": batch[3],
+            "labels": batch[4].to(args.device)
+        }
+        loss = model(**inputs)
+
+
 def main(args):
     if args.model_type == "jump":
         model = WordJumper(args)
+
+    glove_file_path = os.path.join(args.embed_dir, args.embedding_file)
+    word_dict, word_emb = load_glove(glove_file_path)
+    # why module.set_emb() ???
+    model.module.set_emb(word_emb)
 
     # multi-gpu training (should be after apex fp16 initialization)
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
@@ -194,11 +214,12 @@ def main(args):
     dev_file_path = os.path.join(args.data_dir, args.dev_file)
     test_file_path =  os.path.join(args.data_dir, args.test_file)
 
+
     if args.do_train:
         logger.info('-' * 100)
         logger.info('Load data files')
         train_exs = load_data(train_file_path)
-        train_dataset = WJDataSet(train_exs)
+        train_dataset = WJDataSet(train_exs, word_dict)
         train_sampler = SequentialSampler(train_dataset)
         train_loader = DataLoader(
             train_dataset,
@@ -210,11 +231,12 @@ def main(args):
         )
 
         dev_exs = load_data(dev_file_path)
-        dev_dataset = WJDataSet(dev_exs)
+        dev_dataset = WJDataSet(dev_exs, word_dict)
         dev_sampler = SequentialSampler(dev_dataset)
         dev_loader = DataLoader(
             dev_dataset,
             batch_size=args.batch_size,
+            sampler=dev_sampler,
             num_workers=args.data_workers,
             collate_fn=dev_dataset.batchify,
             pin_memory=True,
@@ -245,12 +267,19 @@ def main(args):
                                                     num_training_steps=t_total)
         # Train!
         logger.info("*************** Running training ***************")
-        logger.info("  train examples = %d, words = %d", len(train_dataset), len(train_dataset.word_dict))
-        logger.info("  eval examples = %d, words = %d", len(dev_dataset), len(dev_dataset.word_dict))
+        logger.info("  train examples = %d", len(train_dataset))
+        logger.info("  eval examples = %d", len(dev_dataset))
         logger.info("  Num Epochs = %d", args.num_epochs)
         logger.info("  Total optimization steps = %d", t_total)
 
-        model.generate_word_embbedding(train_data)
+        model.zero_grad()
+        stats = {'timer': utils.Timer(), 'epoch': 0, 'global_step': args.init_step, 'best_valid': 0, 'tr_loss': 0,
+                 'total_loss': 0}
+        set_seed(args)  # Added here for reproductibility
+        start_epoch = 0
+        train_time = utils.Timer()
+        for epoch in range(start_epoch, args.num_epochs):
+            stats['epoch'] = epoch
 
 if __name__ == '__main__':
     # Parse cmdline args and setup environment

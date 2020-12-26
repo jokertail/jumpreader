@@ -209,7 +209,7 @@ class BLSTMEncoder(nn.Module):
         tic = time.time()
         sentences, lengths, idx_sort = self.prepare_samples(
             sentences, bsize, tokenize, verbose)
-        print("3")
+        # print("3")
         # 按照长度递减顺序排列的句子
         embeddings = []
         for stidx in tqdm(range(0, len(sentences), bsize),desc="encoding sentence"):  # 生成句子batch

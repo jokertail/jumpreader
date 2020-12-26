@@ -21,31 +21,29 @@ class WordJumper(Jumper):
             dropout_output=True,
             dropout_rate=args.dropout_rnn
         )
-        self.word_dict = None
         self.glove_dim = args.glove_dim
-        self.glove_path = args.glove_path
 
-    def forward(self, q_seq, sequences, masks, mask_q, labels):
+    def forward(self, q_seq, q_mask, p_seq, p_mask, labels):
         torch.cuda.empty_cache()
         batch_size, max_q_seq = q_seq.size()
         q_seq_emb = torch.FloatTensor(batch_size, max_q_seq, self.args.glove_hidden_size).zero_()
         for i in range(batch_size):
             for j in range(max_q_seq):
-                if masks[i][j] == 0:
+                if p_mask[i][j] == 0:
                     q_seq_emb[i][j].copy_(self.embeddings[q_seq[i][j]])
-        q_emb = self.Q_encoder(q_seq_emb, mask_q)
+        q_emb = self.Q_encoder(q_seq_emb, q_mask)
 
-        _, max_seq = sequences.size()
+        _, max_seq = p_seq.size()
         seq_emb = torch.FloatTensor(batch_size, max_seq, self.args.glove_hidden_size).zero_()
         for i in range(batch_size):
             for j in range(max_seq):
-                if masks[i][j] == 0:
-                    seq_emb[i][j].copy_(self.embeddings[sequences[i][j]])
+                if p_mask[i][j] == 0:
+                    seq_emb[i][j].copy_(self.embeddings[p_seq[i][j]])
 
-        masks = torch.cat((torch.ByteTensor([[0] for i in range(batch_size)]), masks), 1)
+        p_mask = torch.cat((torch.ByteTensor([[0] for i in range(batch_size)]), p_mask), 1)
         max_seq += 1
         seq_emb = torch.cat((torch.unsqueeze(q_emb, 1), seq_emb), 1)
-        lengths = masks.data.eq(0).long().sum(1).squeeze()
+        lengths = p_mask.data.eq(0).long().sum(1).squeeze()
 
         seq_emb = seq_emb.transpose(0, 1)
         state = None
@@ -120,32 +118,3 @@ class WordJumper(Jumper):
 
     def set_glove_path(self, glove_path):
         self.glove_path = glove_path
-
-    def generate_word_dict(self, sentences, tokenize=True):
-        word_dict = Dictionary()
-        if tokenize:
-            from nltk.tokenize import word_tokenize
-
-        sentences = [s.split() if not tokenize else word_tokenize(s)
-                     for s in sentences]
-
-        for sent in sentences:
-            for word in sent:
-                if word not in word_dict:
-                    word_dict.add(word)
-
-        self.word_dict = word_dict
-
-    def generate_word_embbedding(self, word_dict):
-        assert hasattr(self, 'glove_path'), \
-            'warning : you need to set_glove_path(glove_path)'
-        # create word_vec with glove vectors
-        word_emb_np = numpy.zeros((len(word_dict), self.glove_dim), dtype=float)
-        count = 0
-        with open(self.glove_path) as f:
-            for line in f:
-                word, vec = line.split(' ', 1)
-                if word_dict[word] > 1:
-                    word_emb_np[word_dict[word]] = numpy.fromstring(vec, sep=' ')
-                    count += 1
-        self.embeddings = torch.from_numpy(word_emb_np)
