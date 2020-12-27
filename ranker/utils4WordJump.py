@@ -26,7 +26,7 @@ def load_data(filename, mode=None):
                 "ct": [i["str"] for i in l["context_true"]],
                 "cf": [i["str"] for i in l["context_false"]]
             }
-            examples.add(ex)
+            examples.append(ex)
 
     return examples
 

@@ -8,11 +8,10 @@ from torch.nn import functional
 from ranker.data import Dictionary
 from ranker.model import Jumper, LSTMencoder
 
-
-class WordJumper(Jumper):
+class RankWordJumper(Jumper):
 
     def __init__(self, args):
-        super(WordJumper, self).__init__(args)
+        super(RankWordJumper, self).__init__(args)
         self.Q_encoder = LSTMencoder(
             # input_size=args.hidden_size * 2, # without question concatenation
             input_size=300,  # with question concatenation
@@ -22,7 +21,8 @@ class WordJumper(Jumper):
             dropout_rate=args.dropout_rnn
         )
 
-
+    # 一个 GPU 中的一个 batch 只训练一个问题样本，对应固定个段落，其中只有一个正样本，返回一个问题样本分类的 loss
+    # 分类即找出唯一正确的段落样本
     def forward(self, q_seq, q_mask, p_seq, p_mask, labels):
         torch.cuda.empty_cache()
         batch_size, max_q_seq = q_seq.size()
@@ -94,7 +94,8 @@ class WordJumper(Jumper):
         data = torch.cat((data, q_emb - p_emb), 1)
         data = torch.cat((data, torch.mul(q_emb, p_emb)), 1)
         # print(data.size())
-        scores = torch.sigmoid(self.score_net(data)).squeeze()
+        sn = self.score_net(data)
+        scores = torch.sigmoid(sn).squeeze()
         log_probs = torch.cat(log_probs, dim=1)
         baselines = torch.cat(baselines, dim=1)
 
@@ -110,7 +111,8 @@ class WordJumper(Jumper):
         baselines.masked_fill_(mask, 0)
         rewards.masked_fill_(mask, 0)
         torch.cuda.empty_cache()
-        focal_loss = self.focal_loss(scores, labels.float())
+        score_softmax = torch.softmax(sn).squeeze()
+        focal_loss = self.focal_loss(score_softmax, labels.float())
         reinforce_loss = torch.mean((rewards - baselines) * log_probs)
         mse_loss = self.mse_loss(baselines, rewards)
         loss = focal_loss - reinforce_loss + mse_loss
@@ -186,5 +188,5 @@ class WordJumper(Jumper):
         data = torch.cat((data, q_emb - p_emb), 1)
         data = torch.cat((data, torch.mul(q_emb, p_emb)), 1)
         # print(data.size())
-        scores = torch.sigmoid(self.score_net(data)).squeeze()
+        scores = torch.softmax(self.score_net(data)).squeeze()
         return scores
