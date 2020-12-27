@@ -192,6 +192,42 @@ def train(args, data_loader, model, global_stats, scheduler):
             "labels": batch[4].to(args.device)
         }
         loss = model(**inputs)
+        loss = (loss/len(batch[0])).sum()
+        loss.backward()
+        torch.cuda.empty_cache()
+        global_stats['total_loss'] += loss.item()
+        # if (step + 1) % args.gradient_accumulation_steps == 0:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+        args.optimizer.step()
+        scheduler.step()  # Update learning rate schedule
+        model.zero_grad()
+        global_stats['global_step'] += 1
+        global_stats['tr_loss'] = global_stats['total_loss'] / (global_stats['global_step'] - args.init_step)
+        if args.logging_steps > 0 and global_stats['global_step'] % args.logging_steps == 0:
+            logger.info('train: Epoch = %d | iter = %d/%d | ' %
+                        (global_stats['epoch'], global_stats['global_step'], len(batch)) +
+                        'loss = %.4f | elapsed time = %.2f (min) | ' %
+                        (global_stats['tr_loss'], global_stats['timer'].time() / 60) +
+                        'learning_rate: %.6f' % (scheduler.get_lr()[0])
+                        )
+
+def evaluate(data_loader, model, global_stats, mode):
+    eval_time = utils.Timer()
+    exact_match = utils.AverageMeter()
+    exact_match_3 = utils.AverageMeter()
+
+    examples = 0
+    model.eval()
+    for batch in tqdm(data_loader, desc="evaluating"):
+        with torch.no_grad():
+            inputs = {
+                "q_seq": batch[0],
+                "q_mask": batch[1],
+                "p_seq": batch[2],
+                "p_mask": batch[3],
+            }
+            labels = batch[4]
+            scores = model.module.inference(**inputs).squeeze().cpu().detach().numpy().tolist()
 
 
 def main(args):
@@ -280,6 +316,10 @@ def main(args):
         train_time = utils.Timer()
         for epoch in range(start_epoch, args.num_epochs):
             stats['epoch'] = epoch
+
+        train(args, train_loader, model, stats, scheduler)
+
+
 
 if __name__ == '__main__':
     # Parse cmdline args and setup environment
