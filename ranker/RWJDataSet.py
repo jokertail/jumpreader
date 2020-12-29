@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import logging
 import unicodedata
-
+from tqdm import tqdm
 from torch.utils.data import Dataset
 
 from ranker.data import Dictionary
@@ -19,7 +19,7 @@ class RWJDataSet(Dataset):
         # 一组样本中 正样本永远只有一个
         self.size = (1, f_num)
 
-        for ex in exs:
+        for ex in tqdm(exs,desc="forming dataset "):
             question = ex["question"]
             q_token = word_tokenize(question)
             ex_token = {
@@ -36,14 +36,18 @@ class RWJDataSet(Dataset):
                 p_token = word_tokenize(p)
                 ex_token["cf_token"].append(p_token)
 
-            ex_token["cf"].sort(key=len)
+            ex_token["cf_token"].sort(key=len)
 
             if self.mode == "test":
                 self.examples.append(ex_token)
                 continue
 
             sample_num = min(max_t_sample_num, len(ex_token["ct_token"]))
-            stride = (len(ex_token["cf_token"]) - f_num) / sample_num
+            if sample_num == 0 or len(ex_token["cf_token"]) < sample_num+f_num:
+                continue
+
+
+            stride = (int)((len(ex_token["cf_token"]) - f_num) / sample_num)
 
             for i in range(min(max_t_sample_num, len(ex_token["ct_token"]))):
                 fb = stride * i
@@ -100,20 +104,21 @@ class RWJDataSet(Dataset):
             contexts += ex[1]
             labels += ex[2]
 
+        size = len(questions)
         max_q_len = max([len(q) for q in questions])
         max_p_len = max([len(p) for p in contexts])
 
-        q_seq = torch.LongTensor(batch_size, max_q_len).zero_()
-        q_mask = torch.ByteTensor(batch_size, max_q_len).fill_(1)
+        q_seq = torch.LongTensor(size, max_q_len).zero_()
+        q_mask = torch.ByteTensor(size, max_q_len).fill_(1)
         for i, q in enumerate(questions):
             q_seq[i, :len(q)].copy_(torch.LongTensor(q))
             q_mask[i, :len(q)].fill_(0)
 
-        p_seq = torch.LongTensor(batch_size, max_p_len).zero_()
-        p_mask = torch.LongTensor(batch_size, max_p_len).fill_(1)
+        p_seq = torch.LongTensor(size, max_p_len).zero_()
+        p_mask = torch.ByteTensor(size, max_p_len).fill_(1)
         for i, p in enumerate(contexts):
             p_seq[i, :len(p)].copy_(torch.LongTensor(p))
-            p_mask[i, len(p)].fill_(0)
+            p_mask[i, :len(p)].fill_(0)
 
         labels = torch.ByteTensor(labels)
 

@@ -27,22 +27,28 @@ def load_data(filename, mode=None):
                 "cf": [i["str"] for i in l["context_false"]]
             }
             examples.append(ex)
+        print("loading done")
 
     return examples
 
 
 def load_glove(filename, glove_dim=300):
+    logger.info("Loading Glove ...")
     word_dict = Dictionary()
-    word_emb = numpy.zeros((2, glove_dim), dtype=float)
+    zero = numpy.zeros(300)
+    word_emb = [zero,zero]
     count = 0
     with open(filename) as f:
-        for line in f:
+        for line in tqdm(f.readlines(), desc="load Glove"):
             word, vec = line.split(' ', 1)
             word_dict.add(word)
-            word_emb = numpy.vstack((word_emb, numpy.fromstring(vec, sep=' ')))
+            word_emb.append(numpy.fromstring(vec, sep=' '))
             count += 1
+            # if count>1000:
+            #     break
 
     return word_dict, word_emb
+
 
 
 def get_sent_list(examples):

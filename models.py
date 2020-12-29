@@ -103,7 +103,7 @@ class BLSTMEncoder(nn.Module):
         # create word_vec with glove vectors
         word_vec = {}
         with open(self.glove_path) as f:
-            for line in f:
+            for line in tqdm(f.readlines(), desc="load Glove"):
                 word, vec = line.split(' ', 1)
                 if word in word_dict:
                     word_vec[word] = np.fromstring(vec, sep=' ')

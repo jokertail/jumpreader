@@ -74,11 +74,11 @@ def add_train_args(parser):
                        help='Unique model identifier (.mdl, .txt, .checkpoint)')
     files.add_argument('--data-dir', type=str, default='data/quasar/long',
                        help='Directory of training/validation data')
-    files.add_argument('--train-file', type=str, default='demo.txt',
+    files.add_argument('--train-file', type=str, default='demo',
                        help='Preprocessed train file')
-    files.add_argument('--dev-file', type=str, default='demo.txt',
+    files.add_argument('--dev-file', type=str, default='demo',
                        help='Preprocessed dev file')
-    files.add_argument('--test-file', type=str, default='demo.txt',
+    files.add_argument('--test-file', type=str, default='demo',
                        help='Preprocessed dev file')
     files.add_argument('--embed-dir', type=str, default='/home/wxy/xsy/Glove',
                        help='Directory of pre-trained embedding files')
@@ -98,7 +98,7 @@ def add_train_args(parser):
 
     # General
     general = parser.add_argument_group('General')
-    general.add_argument('--logging-steps', type=int, default=2,
+    general.add_argument('--logging-steps', type=int, default=50,
                          help='Log state after every <display_iter> epochs')
 
     # Model architecture
@@ -123,6 +123,9 @@ def add_train_args(parser):
                         help='Optimizer: sgd or adamax')
     config.add_argument('--learning-rate', type=float, default=0.01,
                         help='Learning rate for SGD only')
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=64,
+            help="Number of updates steps to accumulate before performing a backward/update pass.",
+    )
     config.add_argument('--grad-clipping', type=float, default=10,
                         help='Gradient clipping')
     config.add_argument('--weight-decay', type=float, default=0.001,
@@ -141,6 +144,7 @@ def add_train_args(parser):
     config.add_argument("--K", default=10, type=int, help="max skip number for each jump")
 
     config.add_argument("--sample-num", default=6, type=int, help="sampling number of paragraphs to every quesiton")
+    config.add_argument("--glove-hidden-size", default=300, type=int, help="Glove word embedding dimension")
 
 
 def set_defaults(args):
@@ -196,23 +200,25 @@ def train(args, data_loader, model, global_stats, scheduler):
         }
         loss = model(**inputs)
         loss = (loss / len(batch[0])).sum()
+        if args.gradient_accumulation_steps > 1:
+            loss = loss / args.gradient_accumulation_steps
         loss.backward()
         torch.cuda.empty_cache()
         global_stats['total_loss'] += loss.item()
-        # if (step + 1) % args.gradient_accumulation_steps == 0:
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-        args.optimizer.step()
-        scheduler.step()  # Update learning rate schedule
-        model.zero_grad()
-        global_stats['global_step'] += 1
-        global_stats['tr_loss'] = global_stats['total_loss'] / (global_stats['global_step'] - args.init_step)
-        if args.logging_steps > 0 and global_stats['global_step'] % args.logging_steps == 0:
-            logger.info('train: Epoch = %d | iter = %d/%d | ' %
-                        (global_stats['epoch'], global_stats['global_step'], len(batch)) +
-                        'loss = %.4f | elapsed time = %.2f (min) | ' %
-                        (global_stats['tr_loss'], global_stats['timer'].time() / 60) +
-                        'learning_rate: %.6f' % (scheduler.get_lr()[0])
-                        )
+        if (step + 1) % args.gradient_accumulation_steps == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            args.optimizer.step()
+            scheduler.step()  # Update learning rate schedule
+            model.zero_grad()
+            global_stats['global_step'] += 1
+            global_stats['tr_loss'] = global_stats['total_loss'] / (global_stats['global_step'] - args.init_step)
+            if args.logging_steps > 0 and global_stats['global_step'] % args.logging_steps == 0:
+                logger.info('train: Epoch = %d | iter = %d/%d | ' %
+                            (global_stats['epoch'], global_stats['global_step'], len(batch)) +
+                            'loss = %.4f | elapsed time = %.2f (min) | ' %
+                            (global_stats['tr_loss'], global_stats['timer'].time() / 60) +
+                            'learning_rate: %.6f' % (scheduler.get_lr()[0])
+                            )
 
 
 def evaluate(data_loader, model, global_stats, mode):
@@ -235,14 +241,14 @@ def evaluate(data_loader, model, global_stats, mode):
             pred_label = []
             target_label = []
             count = 0
-            for i in range(len(batch)):
+            for i in range((int)(len(labels)/args.sample_num)):
                 pred_label.append(scores[count:count+args.sample_num])
                 target_label.append(labels[count:count+args.sample_num])
                 count += args.sample_num
 
             batch_size = len(pred_label)
             for i in range(batch_size):
-                if pred_label.index(max(pred_label)) == 0:
+                if pred_label[i].index(max(pred_label[i])) == 0:
                     exact_match.update(1)
                 else:
                     exact_match.update(0)
@@ -261,26 +267,23 @@ def main(args):
     if args.model_type == "jump":
         model = RankWordJumper(args)
 
-    glove_file_path = os.path.join(args.embed_dir, args.embedding_file)
-    word_dict, word_emb = load_glove(glove_file_path)
-    # why module.set_emb() ???
-    model.module.set_emb(word_emb)
-
-    # multi-gpu training (should be after apex fp16 initialization)
+        # multi-gpu training (should be after apex fp16 initialization)
     args.device = torch.device("cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu")
     args.n_gpu = 0 if args.no_cuda else torch.cuda.device_count()
     if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
     model.to(args.device)
 
-    train_file_path = os.path.join(args.data_dir, args.train_file)
-    dev_file_path = os.path.join(args.data_dir, args.dev_file)
-    test_file_path = os.path.join(args.data_dir, args.test_file)
+    glove_file_path = os.path.join(args.embed_dir, args.embedding_file)
+    word_dict, word_emb = load_glove(glove_file_path)
+    # why module.set_emb() ???
+    model.module.set_emb(word_emb)
+
 
     if args.do_train:
         logger.info('-' * 100)
         logger.info('Load data files')
-        train_exs = load_data(train_file_path)
+        train_exs = load_data(args.train_path)
         train_dataset = RWJDataSet(train_exs, word_dict)
         train_sampler = SequentialSampler(train_dataset)
         train_loader = DataLoader(
@@ -292,7 +295,7 @@ def main(args):
             pin_memory=True,
         )
 
-        dev_exs = load_data(dev_file_path)
+        dev_exs = load_data(args.dev_path)
         dev_dataset = RWJDataSet(dev_exs, word_dict)
         dev_sampler = SequentialSampler(dev_dataset)
         dev_loader = DataLoader(
@@ -332,6 +335,7 @@ def main(args):
         logger.info("  train examples = %d", len(train_dataset))
         logger.info("  eval examples = %d", len(dev_dataset))
         logger.info("  Num Epochs = %d", args.num_epochs)
+        logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
         logger.info("  Total optimization steps = %d", t_total)
 
         model.zero_grad()

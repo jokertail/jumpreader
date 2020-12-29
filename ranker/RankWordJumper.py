@@ -2,20 +2,33 @@ from operator import setitem
 
 import numpy
 import torch
+from torch import nn
 from torch.distributions import Categorical
 from torch.nn import functional
 
 from ranker.data import Dictionary
-from ranker.model import Jumper, LSTMencoder
+from ranker.model import Jumper, LSTMencoder, FocalLoss
 
-class RankWordJumper(Jumper):
+
+class RankWordJumper(nn.Module):
 
     def __init__(self, args):
-        super(RankWordJumper, self).__init__(args)
+        super(RankWordJumper, self).__init__()
+        self.lstm = nn.LSTMCell(args.glove_hidden_size, args.glove_hidden_size)
+        self.linear = nn.Linear(args.glove_hidden_size, args.K + 1)
+        self.baseline = nn.Linear(args.glove_hidden_size, 1)
+        self.mse_loss = nn.MSELoss()
+        self.args = args
+        self.embeddings = None
+        self.score_net = nn.Sequential(nn.Linear(in_features=args.glove_hidden_size*4, out_features=256),
+                                       nn.Dropout(0.1),
+                                       nn.LeakyReLU(inplace=True),
+                                       nn.Linear(in_features=256, out_features=1))
+        self.focal_loss = FocalLoss(alpha=1, gamma=2, logits=False, reduce=True)
         self.Q_encoder = LSTMencoder(
             # input_size=args.hidden_size * 2, # without question concatenation
-            input_size=300,  # with question concatenation
-            hidden_size=300,
+            input_size=args.glove_hidden_size,  # with question concatenation
+            hidden_size=args.glove_hidden_size,
             num_layers=1,
             dropout_output=True,
             dropout_rate=args.dropout_rnn
@@ -31,7 +44,8 @@ class RankWordJumper(Jumper):
             for j in range(max_q_seq):
                 if q_mask[i][j] == 0:
                     q_seq_emb[i][j].copy_(self.embeddings[q_seq[i][j]])
-        q_emb = self.Q_encoder(q_seq_emb, q_mask)
+        q_emb = self.Q_encoder(q_seq_emb.cuda(), q_mask)
+        q_emb = q_emb[:, max_q_seq - 1, :]
 
         _, max_seq = p_seq.size()
         seq_emb = torch.FloatTensor(batch_size, max_seq, self.args.glove_hidden_size).zero_()
@@ -40,9 +54,9 @@ class RankWordJumper(Jumper):
                 if p_mask[i][j] == 0:
                     seq_emb[i][j].copy_(self.embeddings[p_seq[i][j]])
 
-        p_mask = torch.cat((torch.ByteTensor([[0] for i in range(batch_size)]), p_mask), 1)
+        p_mask = torch.cat((torch.ByteTensor([[0]] * batch_size).cuda(), p_mask), 1)
         max_seq += 1
-        seq_emb = torch.cat((torch.unsqueeze(q_emb, 1), seq_emb), 1)
+        seq_emb = torch.cat((torch.unsqueeze(q_emb, 1), seq_emb.cuda()), 1)
         lengths = p_mask.data.eq(0).long().sum(1).squeeze()
 
         seq_emb = seq_emb.transpose(0, 1)
@@ -111,21 +125,26 @@ class RankWordJumper(Jumper):
         baselines.masked_fill_(mask, 0)
         rewards.masked_fill_(mask, 0)
         torch.cuda.empty_cache()
-        score_softmax = torch.softmax(sn).squeeze()
+        score_softmax = torch.softmax(sn,0).squeeze()
         focal_loss = self.focal_loss(score_softmax, labels.float())
         reinforce_loss = torch.mean((rewards - baselines) * log_probs)
         mse_loss = self.mse_loss(baselines, rewards)
         loss = focal_loss - reinforce_loss + mse_loss
         return loss
 
+    def set_emb(self, embeddings):
+        self.embeddings = torch.FloatTensor(embeddings).detach()
+
     def inference(self, q_seq, q_mask, p_seq, p_mask):
+        torch.cuda.empty_cache()
         batch_size, max_q_seq = q_seq.size()
         q_seq_emb = torch.FloatTensor(batch_size, max_q_seq, self.args.glove_hidden_size).zero_()
         for i in range(batch_size):
             for j in range(max_q_seq):
-                if p_mask[i][j] == 0:
+                if q_mask[i][j] == 0:
                     q_seq_emb[i][j].copy_(self.embeddings[q_seq[i][j]])
-        q_emb = self.Q_encoder(q_seq_emb, q_mask)
+        q_emb = self.Q_encoder(q_seq_emb.cuda(), q_mask.cuda())
+        q_emb = q_emb[:, max_q_seq - 1, :]
 
         _, max_seq = p_seq.size()
         seq_emb = torch.FloatTensor(batch_size, max_seq, self.args.glove_hidden_size).zero_()
@@ -134,9 +153,9 @@ class RankWordJumper(Jumper):
                 if p_mask[i][j] == 0:
                     seq_emb[i][j].copy_(self.embeddings[p_seq[i][j]])
 
-        p_mask = torch.cat((torch.ByteTensor([[0] for i in range(batch_size)]), p_mask), 1)
+        p_mask = torch.cat((torch.ByteTensor([[0]] * batch_size).cuda(), p_mask.cuda()), 1)
         max_seq += 1
-        seq_emb = torch.cat((torch.unsqueeze(q_emb, 1), seq_emb), 1)
+        seq_emb = torch.cat((torch.unsqueeze(q_emb, 1), seq_emb.cuda()), 1)
         lengths = p_mask.data.eq(0).long().sum(1).squeeze()
 
         seq_emb = seq_emb.transpose(0, 1)
@@ -188,5 +207,5 @@ class RankWordJumper(Jumper):
         data = torch.cat((data, q_emb - p_emb), 1)
         data = torch.cat((data, torch.mul(q_emb, p_emb)), 1)
         # print(data.size())
-        scores = torch.softmax(self.score_net(data)).squeeze()
-        return scores
+        sn = self.score_net(data)
+        return sn
