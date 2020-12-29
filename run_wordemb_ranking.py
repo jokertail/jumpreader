@@ -46,7 +46,7 @@ def add_train_args(parser):
                                'operations (for reproducibility)'))
     runtime.add_argument('--num-epochs', type=int, default=50,
                          help='Train data iterations')
-    runtime.add_argument('--batch-size', type=int, default=2,
+    runtime.add_argument('--batch-size', type=int, default=64,
                          help='Batch size for training')
     runtime.add_argument('--test-batch-size', type=int, default=32,
                          help='Batch size during validation/testing')
@@ -123,7 +123,7 @@ def add_train_args(parser):
                         help='Optimizer: sgd or adamax')
     config.add_argument('--learning-rate', type=float, default=0.01,
                         help='Learning rate for SGD only')
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=64,
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
             help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     config.add_argument('--grad-clipping', type=float, default=10,
@@ -188,6 +188,7 @@ def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
 
 
 def train(args, data_loader, model, global_stats, scheduler):
+    loss = 0
     for step, batch in tqdm(enumerate(data_loader), desc="training"):
         model.train()
         torch.cuda.empty_cache()
@@ -196,20 +197,24 @@ def train(args, data_loader, model, global_stats, scheduler):
             "q_mask": batch[1],
             "p_seq": batch[2],
             "p_mask": batch[3],
-            "labels": batch[4].to(args.device)
+            "labels": batch[4].to(args.device),
+            "q_length": batch[5],
+            "group_size": batch[6]
         }
-        loss = model(**inputs)
-        loss = (loss / len(batch[0])).sum()
-        if args.gradient_accumulation_steps > 1:
-            loss = loss / args.gradient_accumulation_steps
-        loss.backward()
-        torch.cuda.empty_cache()
-        global_stats['total_loss'] += loss.item()
+        loss_tem = model(**inputs)
+        loss_tem = loss_tem.sum()
+        loss += loss_tem
+        # if args.gradient_accumulation_steps > 1:
+        #     loss = loss / args.gradient_accumulation_steps
+        # torch.cuda.empty_cache()
+        global_stats['total_loss'] += loss_tem.item()
         if (step + 1) % args.gradient_accumulation_steps == 0:
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            loss.backward()
             args.optimizer.step()
             scheduler.step()  # Update learning rate schedule
             model.zero_grad()
+            loss = 0
             global_stats['global_step'] += 1
             global_stats['tr_loss'] = global_stats['total_loss'] / (global_stats['global_step'] - args.init_step)
             if args.logging_steps > 0 and global_stats['global_step'] % args.logging_steps == 0:
@@ -234,7 +239,8 @@ def evaluate(data_loader, model, global_stats, mode):
                 "q_seq": batch[0],
                 "q_mask": batch[1],
                 "p_seq": batch[2],
-                "p_mask": batch[3]
+                "p_mask": batch[3],
+                "q_length": batch[5]
             }
             labels = batch[4]
             scores = model.module.inference(**inputs).squeeze().cpu().detach().numpy().tolist()

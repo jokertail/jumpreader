@@ -10,15 +10,17 @@ from ranker.data import Dictionary
 
 class RWJDataSet(Dataset):
 
-    def __init__(self, exs, word_dict, f_num=5, max_t_sample_num=4, mode='train'):
+    def __init__(self, exs, word_dict, f_num=5, max_t_sample_num=4, max_train_ex_num=20000, mode='train'):
         from nltk.tokenize import word_tokenize
         self.word_dict = word_dict
         self.examples = []
         self.mode = mode
+        self.max_train_ex_num = max_train_ex_num
 
         # 一组样本中 正样本永远只有一个
         self.size = (1, f_num)
 
+        count = 0
         for ex in tqdm(exs,desc="forming dataset "):
             question = ex["question"]
             q_token = word_tokenize(question)
@@ -56,6 +58,10 @@ class RWJDataSet(Dataset):
                     "ct_token": ex_token["ct_token"][i],
                     "cf_token": ex_token["cf_token"][fb:fb + f_num]
                 })
+                count += 1
+                if count== self.max_train_ex_num:
+                    return
+
 
     def __len__(self):
         return len(self.examples)
@@ -99,7 +105,12 @@ class RWJDataSet(Dataset):
         contexts = []
         # batch_size 个标签，对应到 GPU 中只有一个问题的标签
         labels = []
+
+        group_size = len(batch[0][0])
+
+        q_length = []
         for ex in batch:
+            q_length += [len(ex[0][0])]*len(ex[0])
             questions += ex[0]
             contexts += ex[1]
             labels += ex[2]
@@ -122,4 +133,4 @@ class RWJDataSet(Dataset):
 
         labels = torch.ByteTensor(labels)
 
-        return q_seq, q_mask, p_seq, p_mask, labels
+        return q_seq, q_mask, p_seq, p_mask, labels, q_length, group_size

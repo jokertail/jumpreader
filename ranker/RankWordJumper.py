@@ -20,7 +20,7 @@ class RankWordJumper(nn.Module):
         self.mse_loss = nn.MSELoss()
         self.args = args
         self.embeddings = None
-        self.score_net = nn.Sequential(nn.Linear(in_features=args.glove_hidden_size*4, out_features=256),
+        self.score_net = nn.Sequential(nn.Linear(in_features=args.glove_hidden_size * 4, out_features=256),
                                        nn.Dropout(0.1),
                                        nn.LeakyReLU(inplace=True),
                                        nn.Linear(in_features=256, out_features=1))
@@ -36,7 +36,7 @@ class RankWordJumper(nn.Module):
 
     # 一个 GPU 中的一个 batch 只训练一个问题样本，对应固定个段落，其中只有一个正样本，返回一个问题样本分类的 loss
     # 分类即找出唯一正确的段落样本
-    def forward(self, q_seq, q_mask, p_seq, p_mask, labels):
+    def forward(self, q_seq, q_mask, p_seq, p_mask, labels, q_length, group_size):
         torch.cuda.empty_cache()
         batch_size, max_q_seq = q_seq.size()
         q_seq_emb = torch.FloatTensor(batch_size, max_q_seq, self.args.glove_hidden_size).zero_()
@@ -44,8 +44,10 @@ class RankWordJumper(nn.Module):
             for j in range(max_q_seq):
                 if q_mask[i][j] == 0:
                     q_seq_emb[i][j].copy_(self.embeddings[q_seq[i][j]])
-        q_emb = self.Q_encoder(q_seq_emb.cuda(), q_mask)
-        q_emb = q_emb[:, max_q_seq - 1, :]
+        tem_q_emb = self.Q_encoder(q_seq_emb.cuda(), q_mask)
+        q_emb = torch.FloatTensor(batch_size, self.args.glove_hidden_size).zero_().cuda()
+        for i in range(batch_size):
+            q_emb[i].copy_(tem_q_emb[i][q_length[i]-1])
 
         _, max_seq = p_seq.size()
         seq_emb = torch.FloatTensor(batch_size, max_seq, self.args.glove_hidden_size).zero_()
@@ -125,17 +127,19 @@ class RankWordJumper(nn.Module):
         baselines.masked_fill_(mask, 0)
         rewards.masked_fill_(mask, 0)
         torch.cuda.empty_cache()
-        score_softmax = torch.softmax(sn,0).squeeze()
-        focal_loss = self.focal_loss(score_softmax, labels.float())
-        reinforce_loss = torch.mean((rewards - baselines) * log_probs)
-        mse_loss = self.mse_loss(baselines, rewards)
-        loss = focal_loss - reinforce_loss + mse_loss
+        loss = torch.FloatTensor(1).zero_().cuda()
+        for i in range((int)(batch_size/group_size)):
+            score_softmax = torch.softmax(sn[i:i+group_size], 0).squeeze()
+            focal_loss = self.focal_loss(score_softmax, labels[i:i+group_size].float())
+            reinforce_loss = torch.mean((rewards - baselines) * log_probs)
+            mse_loss = self.mse_loss(baselines, rewards)
+            loss += focal_loss - reinforce_loss + mse_loss
         return loss
 
     def set_emb(self, embeddings):
         self.embeddings = torch.FloatTensor(embeddings).detach()
 
-    def inference(self, q_seq, q_mask, p_seq, p_mask):
+    def inference(self, q_seq, q_mask, p_seq, p_mask, q_length):
         torch.cuda.empty_cache()
         batch_size, max_q_seq = q_seq.size()
         q_seq_emb = torch.FloatTensor(batch_size, max_q_seq, self.args.glove_hidden_size).zero_()
@@ -143,8 +147,10 @@ class RankWordJumper(nn.Module):
             for j in range(max_q_seq):
                 if q_mask[i][j] == 0:
                     q_seq_emb[i][j].copy_(self.embeddings[q_seq[i][j]])
-        q_emb = self.Q_encoder(q_seq_emb.cuda(), q_mask.cuda())
-        q_emb = q_emb[:, max_q_seq - 1, :]
+        tem_q_emb = self.Q_encoder(q_seq_emb.cuda(), q_mask.cuda())
+        q_emb = torch.FloatTensor(batch_size, self.args.glove_hidden_size).zero_().cuda()
+        for i in range(batch_size):
+            q_emb[i].copy_(tem_q_emb[i][q_length[i]-1])
 
         _, max_seq = p_seq.size()
         seq_emb = torch.FloatTensor(batch_size, max_seq, self.args.glove_hidden_size).zero_()
