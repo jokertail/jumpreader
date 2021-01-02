@@ -129,8 +129,8 @@ class RankWordJumper(nn.Module):
         torch.cuda.empty_cache()
         loss = torch.FloatTensor(1).zero_().cuda()
         for i in range((int)(batch_size/group_size)):
-            score_softmax = torch.softmax(sn[i:i+group_size], 0).squeeze()
-            focal_loss = self.focal_loss(score_softmax, labels[i:i+group_size].float())
+            score_softmax = torch.softmax(sn[i*group_size:(i+1)*group_size], 0).squeeze()
+            focal_loss = self.focal_loss(score_softmax, labels[i*group_size:(i+1)*group_size].float())
             reinforce_loss = torch.mean((rewards - baselines) * log_probs)
             mse_loss = self.mse_loss(baselines, rewards)
             loss += focal_loss - reinforce_loss + mse_loss

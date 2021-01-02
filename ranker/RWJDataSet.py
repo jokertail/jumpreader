@@ -15,13 +15,37 @@ class RWJDataSet(Dataset):
         self.word_dict = word_dict
         self.examples = []
         self.mode = mode
+
+        def get_c_length(x):
+            return len(x[0])
+
+        if self.mode == "test":
+            for ex in tqdm(exs, desc="forming dataset "):
+                question = ex["question"]
+                q_token = word_tokenize(question)
+                ex_token = {
+                    "q_token": q_token,
+                    "c_token": [],
+                }
+                for p in ex["ct"]:
+                    p_token = word_tokenize(p)
+                    ex_token["c_token"].append((p_token, 1))
+
+                for p in ex["cf"]:
+                    p_token = word_tokenize(p)
+                    ex_token["c_token"].append((p_token, 0))
+
+                ex_token["c_token"].sort(key=get_c_length)
+                self.examples.append(ex_token)
+            return
+
         self.max_train_ex_num = max_train_ex_num
 
         # 一组样本中 正样本永远只有一个
         self.size = (1, f_num)
 
         count = 0
-        for ex in tqdm(exs,desc="forming dataset "):
+        for ex in tqdm(exs, desc="forming dataset "):
             question = ex["question"]
             q_token = word_tokenize(question)
             ex_token = {
@@ -40,14 +64,9 @@ class RWJDataSet(Dataset):
 
             ex_token["cf_token"].sort(key=len)
 
-            if self.mode == "test":
-                self.examples.append(ex_token)
-                continue
-
             sample_num = min(max_t_sample_num, len(ex_token["ct_token"]))
-            if sample_num == 0 or len(ex_token["cf_token"]) < sample_num+f_num:
+            if sample_num == 0 or len(ex_token["cf_token"]) < sample_num + f_num:
                 continue
-
 
             stride = (int)((len(ex_token["cf_token"]) - f_num) / sample_num)
 
@@ -59,9 +78,8 @@ class RWJDataSet(Dataset):
                     "cf_token": ex_token["cf_token"][fb:fb + f_num]
                 })
                 count += 1
-                if count== self.max_train_ex_num:
+                if count == self.max_train_ex_num:
                     return
-
 
     def __len__(self):
         return len(self.examples)
@@ -82,6 +100,15 @@ class RWJDataSet(Dataset):
         #     return vectorize_test(self.examples[index], self.sentence_dict)
 
     def vectorize(self, ex):
+        if self.mode == "test":
+            question = [[self.word_dict[i] for i in ex["q_token"]]]
+            context = []
+            label = []
+            for c in ex["c_token"]:
+                context.append([self.word_dict[i] for i in c[0]])
+                label.append(c[1])
+            return question, context, label
+
         question = [[self.word_dict[i] for i in ex["q_token"]]]
         context = [[self.word_dict[i] for i in ex["ct_token"]]]
         for cf in ex["cf_token"]:
@@ -110,7 +137,7 @@ class RWJDataSet(Dataset):
 
         q_length = []
         for ex in batch:
-            q_length += [len(ex[0][0])]*len(ex[0])
+            q_length += [len(ex[0][0])] * len(ex[0])
             questions += ex[0]
             contexts += ex[1]
             labels += ex[2]
@@ -134,3 +161,54 @@ class RWJDataSet(Dataset):
         labels = torch.ByteTensor(labels)
 
         return q_seq, q_mask, p_seq, p_mask, labels, q_length, group_size
+
+    # 对于测试的 batchify，一个 batch 只取一个问题的所有段落，并根据实际进入网络的数据进行分片
+    @staticmethod
+    def batchify_test(batch, mode='test'):
+
+        max_slide = 64
+
+        assert len(batch) == 1
+        ex = batch[0]
+
+        q_seq = torch.LongTensor(ex[0])
+
+        slides = []
+        bidx = eidx = 0
+        while bidx < len(ex[1]):
+            eidx = min(len(ex[1]), bidx + max_slide)
+            slides.append((bidx, eidx))
+            bidx = eidx
+
+        slide_question = []
+
+        slide_question_mask = []
+
+        slide_context = []
+
+        slide_context_mask = []
+
+        label = []
+
+        for s in slides:
+            slide_size = s[1] - s[0]
+
+            slide_question.append(q_seq.repeat(slide_size, 1))
+            slide_question_mask.append(torch.ByteTensor(slide_size, len(ex[0][0])).fill_(0))
+
+            context = []
+            label = []
+            for i in range(s[0], s[1]):
+                context.append(ex[1][i])
+                label.append(ex[2][i])
+            max_p_len = max([len(p) for p in context])
+            p_seq = torch.LongTensor(slide_size, max_p_len).zero_()
+            p_mask = torch.ByteTensor(slide_size, max_p_len).fill_(1)
+            for i, p in enumerate(context):
+                p_seq[i, :len(p)].copy_(torch.LongTensor(p))
+                p_mask[i, :len(p)].fill_(0)
+
+            slide_context.append(p_seq)
+            slide_context_mask.append(p_mask)
+
+        return slide_question, slide_question_mask, slide_context, slide_context_mask, label

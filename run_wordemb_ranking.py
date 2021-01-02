@@ -78,14 +78,14 @@ def add_train_args(parser):
                        help='Preprocessed train file')
     files.add_argument('--dev-file', type=str, default='demo',
                        help='Preprocessed dev file')
-    files.add_argument('--test-file', type=str, default='demo',
+    files.add_argument('--test-file', type=str, default='test',
                        help='Preprocessed dev file')
     files.add_argument('--embed-dir', type=str, default='/home/wxy/xsy/Glove',
                        help='Directory of pre-trained embedding files')
     files.add_argument('--embedding-file', type=str,
                        default='glove.840B.300d.txt',
                        help='Space-separated pretrained embeddings file')
-    files.add_argument("--ckpt-file", type=str, default="test_checkpoint-4",
+    files.add_argument("--ckpt-file", type=str, default="test_checkpoint-15650",
                        help="the model checkpoint file.", )
     files.add_argument("--result_path", type=str, default="result/long",
                        help="The output directory where the model checkpoints and predictions will be written.", )
@@ -124,8 +124,8 @@ def add_train_args(parser):
     config.add_argument('--learning-rate', type=float, default=0.01,
                         help='Learning rate for SGD only')
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1,
-            help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
+                        help="Number of updates steps to accumulate before performing a backward/update pass.",
+                        )
     config.add_argument('--grad-clipping', type=float, default=10,
                         help='Gradient clipping')
     config.add_argument('--weight-decay', type=float, default=0.001,
@@ -247,9 +247,9 @@ def evaluate(data_loader, model, global_stats, mode):
             pred_label = []
             target_label = []
             count = 0
-            for i in range((int)(len(labels)/args.sample_num)):
-                pred_label.append(scores[count:count+args.sample_num])
-                target_label.append(labels[count:count+args.sample_num])
+            for i in range((int)(len(labels) / args.sample_num)):
+                pred_label.append(scores[count:count + args.sample_num])
+                target_label.append(labels[count:count + args.sample_num])
                 count += args.sample_num
 
             batch_size = len(pred_label)
@@ -268,6 +268,46 @@ def evaluate(data_loader, model, global_stats, mode):
     return {'exact_match': exact_match.avg}
 
 
+def test(data_loader, model, mode):
+    eval_time = utils.Timer()
+    exact_match = utils.AverageMeter()
+    exact_match_top3 = utils.AverageMeter()
+    for batch in tqdm(data_loader, desc="test evaluating"):
+        with torch.no_grad():
+            labels = batch[4]
+            scores = []
+
+            for i in range(len(batch[0])):
+                inputs = {
+                    "q_seq": batch[0][i],
+                    "q_mask": batch[1][i],
+                    "p_seq": batch[2][i],
+                    "p_mask": batch[3][i],
+                    "q_length": [batch[0][i].size(1)] * batch[0][i].size(0),
+                }
+                scores += model.module.inference(**inputs).squeeze().cpu().detach().numpy().tolist()
+
+            eval_top3 = list(map(scores.index, heapq.nlargest(3, scores)))
+
+            if labels[eval_top3[0]] == 1:
+                exact_match.update(1)
+            else:
+                exact_match.update(0)
+
+            flag = 0
+            for sidx in eval_top3:
+                if labels[sidx] == 1:
+                    flag = 1
+                    break
+            exact_match_top3.update(flag)
+
+    logger.info('recall_1 = %.4f ,recall_3 = %4f' %
+                (exact_match.avg, exact_match_top3.avg))
+    return {
+        "exact_match": exact_match.avg,
+        "exact_match_top3": exact_match_top3.avg
+    }
+
 
 def main(args):
     if args.model_type == "jump":
@@ -284,7 +324,6 @@ def main(args):
     word_dict, word_emb = load_glove(glove_file_path)
     # why module.set_emb() ???
     model.module.set_emb(word_emb)
-
 
     if args.do_train:
         logger.info('-' * 100)
@@ -371,6 +410,37 @@ def main(args):
         logger.info('-' * 100)
         logger.info('Time for training = %.2f (s)' % train_time.time())
         logger.info('-' * 100)
+
+    if args.do_test:
+        logger.info('-' * 100)
+        logger.info('Load data files')
+        test_exs = load_data(args.test_path)
+        test_dataset = RWJDataSet(test_exs, word_dict, mode="test")
+        test_sampler = SequentialSampler(test_dataset)
+        test_dataloader = DataLoader(
+            test_dataset,
+            batch_size=1,
+            sampler=test_sampler,
+            num_workers=args.data_workers,
+            collate_fn=test_dataset.batchify_test,
+            pin_memory=True,
+        )
+
+        state_dict = torch.load(args.ckpt_path)
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            if 'module' not in k:
+                k = 'module.' + k
+            else:
+                k = k.replace('features.module.', 'module.features.')
+            new_state_dict[k] = v
+
+        model.load_state_dict(new_state_dict)
+        model.module.set_emb(word_emb)
+        pred_time = utils.Timer()
+        model.eval()
+
+        test(test_dataloader, model, mode="test")
 
 
 if __name__ == '__main__':
