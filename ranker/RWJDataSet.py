@@ -101,10 +101,12 @@ class RWJDataSet(Dataset):
 
     def vectorize(self, ex):
         if self.mode == "test":
-            question = [[self.word_dict[i] for i in ex["q_token"]]]
+            q = [self.word_dict[i] for i in ex["q_token"]]
+            question = []
             context = []
             label = []
             for c in ex["c_token"]:
+                question.append(q)
                 context.append([self.word_dict[i] for i in c[0]])
                 label.append(c[1])
             return question, context, label
@@ -166,17 +168,28 @@ class RWJDataSet(Dataset):
     @staticmethod
     def batchify_test(batch, mode='test'):
 
-        max_slide = 64
+        batch_size = len(batch)
 
-        assert len(batch) == 1
-        ex = batch[0]
 
-        q_seq = torch.LongTensor(ex[0])
+        q_slide = []
+        q_all = []
+        c_all = []
+        l_all = []
+        q_idx = 0
+        for i in range(batch_size):
+            q_all += batch[i][0]
+            c_all += batch[i][1]
+            l_all += batch[i][2]
+            q_slide.append((q_idx, len(q_all)))
+            q_idx = len(q_all)
+
+
+        max_slide = 4096
 
         slides = []
         bidx = eidx = 0
-        while bidx < len(ex[1]):
-            eidx = min(len(ex[1]), bidx + max_slide)
+        while bidx < len(q_all):
+            eidx = min(len(q_all), bidx + max_slide)
             slides.append((bidx, eidx))
             bidx = eidx
 
@@ -188,19 +201,30 @@ class RWJDataSet(Dataset):
 
         slide_context_mask = []
 
-        label = []
+        slide_q_length = []
 
         for s in slides:
             slide_size = s[1] - s[0]
 
-            slide_question.append(q_seq.repeat(slide_size, 1))
-            slide_question_mask.append(torch.ByteTensor(slide_size, len(ex[0][0])).fill_(0))
+            question = []
+            for i in range(s[0],s[1]):
+                question.append(q_all[i])
+            max_q_len = max([len(q) for q in question])
+            q_seq = torch.LongTensor(slide_size, max_q_len).zero_()
+            q_mask = torch.ByteTensor(slide_size, max_q_len).fill_(1)
+            q_length = []
+            for i, q in enumerate(question):
+                q_seq[i, :len(q)].copy_(torch.LongTensor(q))
+                q_mask[i, :len(q)].fill_(0)
+                q_length.append(len(q))
+            slide_question.append(q_seq)
+            slide_question_mask.append(q_mask)
+            slide_q_length.append(q_length)
+
 
             context = []
-            label = []
             for i in range(s[0], s[1]):
-                context.append(ex[1][i])
-                label.append(ex[2][i])
+                context.append(c_all[i])
             max_p_len = max([len(p) for p in context])
             p_seq = torch.LongTensor(slide_size, max_p_len).zero_()
             p_mask = torch.ByteTensor(slide_size, max_p_len).fill_(1)
@@ -211,4 +235,4 @@ class RWJDataSet(Dataset):
             slide_context.append(p_seq)
             slide_context_mask.append(p_mask)
 
-        return slide_question, slide_question_mask, slide_context, slide_context_mask, label
+        return slide_question, slide_question_mask, slide_context, slide_context_mask, l_all, slide_q_length, q_slide

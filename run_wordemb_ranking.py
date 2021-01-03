@@ -70,7 +70,7 @@ def add_train_args(parser):
     files = parser.add_argument_group('Filesystem')
     files.add_argument('--output-dir', type=str, default='output/long',
                        help='Directory for saved ranker/checkpoints/logs')
-    files.add_argument('--model-name', type=str, default='test',
+    files.add_argument('--model-name', type=str, default='mrl-test',
                        help='Unique model identifier (.mdl, .txt, .checkpoint)')
     files.add_argument('--data-dir', type=str, default='data/quasar/long',
                        help='Directory of training/validation data')
@@ -85,7 +85,7 @@ def add_train_args(parser):
     files.add_argument('--embedding-file', type=str,
                        default='glove.840B.300d.txt',
                        help='Space-separated pretrained embeddings file')
-    files.add_argument("--ckpt-file", type=str, default="test_checkpoint-15650",
+    files.add_argument("--ckpt-file", type=str, default="test_checkpoint-7512",
                        help="the model checkpoint file.", )
     files.add_argument("--result_path", type=str, default="result/long",
                        help="The output directory where the model checkpoints and predictions will be written.", )
@@ -274,8 +274,9 @@ def test(data_loader, model, mode):
     exact_match_top3 = utils.AverageMeter()
     for batch in tqdm(data_loader, desc="test evaluating"):
         with torch.no_grad():
-            labels = batch[4]
-            scores = []
+            labels_all = batch[4]
+            q_slide = batch[6]
+            scores_all = []
 
             for i in range(len(batch[0])):
                 inputs = {
@@ -283,23 +284,27 @@ def test(data_loader, model, mode):
                     "q_mask": batch[1][i],
                     "p_seq": batch[2][i],
                     "p_mask": batch[3][i],
-                    "q_length": [batch[0][i].size(1)] * batch[0][i].size(0),
+                    "q_length": batch[5][i],
                 }
-                scores += model.module.inference(**inputs).squeeze().cpu().detach().numpy().tolist()
+                scores_all += model.module.inference(**inputs).squeeze().cpu().detach().numpy().tolist()
 
-            eval_top3 = list(map(scores.index, heapq.nlargest(3, scores)))
+            for qs in q_slide:
+                scores = scores_all[qs[0]:qs[1]]
+                labels = labels_all[qs[0]:qs[1]]
 
-            if labels[eval_top3[0]] == 1:
-                exact_match.update(1)
-            else:
-                exact_match.update(0)
+                eval_top3 = list(map(scores.index, heapq.nlargest(3, scores)))
 
-            flag = 0
-            for sidx in eval_top3:
-                if labels[sidx] == 1:
-                    flag = 1
-                    break
-            exact_match_top3.update(flag)
+                if labels[eval_top3[0]] == 1:
+                    exact_match.update(1)
+                else:
+                    exact_match.update(0)
+
+                flag = 0
+                for sidx in eval_top3:
+                    if labels[sidx] == 1:
+                        flag = 1
+                        break
+                exact_match_top3.update(flag)
 
     logger.info('recall_1 = %.4f ,recall_3 = %4f' %
                 (exact_match.avg, exact_match_top3.avg))
@@ -419,7 +424,7 @@ def main(args):
         test_sampler = SequentialSampler(test_dataset)
         test_dataloader = DataLoader(
             test_dataset,
-            batch_size=1,
+            batch_size=args.test_batch_size,
             sampler=test_sampler,
             num_workers=args.data_workers,
             collate_fn=test_dataset.batchify_test,

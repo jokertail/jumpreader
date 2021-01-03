@@ -128,12 +128,17 @@ class RankWordJumper(nn.Module):
         rewards.masked_fill_(mask, 0)
         torch.cuda.empty_cache()
         loss = torch.FloatTensor(1).zero_().cuda()
+        margin_ranking_loss = torch.FloatTensor(1).zero_().cuda()
+        target = torch.FloatTensor(1).fill_(1).cuda()
         for i in range((int)(batch_size/group_size)):
             score_softmax = torch.softmax(sn[i*group_size:(i+1)*group_size], 0).squeeze()
-            focal_loss = self.focal_loss(score_softmax, labels[i*group_size:(i+1)*group_size].float())
+            margin_ranking_loss.fill_(0)
+            for j in range(group_size-1):
+                margin_ranking_loss += functional.margin_ranking_loss(sn[i*group_size], sn[i*group_size+j+1], target)
+            # focal_loss += self.focal_loss(score_softmax, labels[i*group_size:(i+1)*group_size].float())
             reinforce_loss = torch.mean((rewards - baselines) * log_probs)
             mse_loss = self.mse_loss(baselines, rewards)
-            loss += focal_loss - reinforce_loss + mse_loss
+            loss += margin_ranking_loss - reinforce_loss + mse_loss
         return loss
 
     def set_emb(self, embeddings):
