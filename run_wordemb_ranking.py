@@ -85,7 +85,7 @@ def add_train_args(parser):
     files.add_argument('--embedding-file', type=str,
                        default='glove.840B.300d.txt',
                        help='Space-separated pretrained embeddings file')
-    files.add_argument("--ckpt-file", type=str, default="test_checkpoint-7512",
+    files.add_argument("--ckpt-file", type=str, default="mrl-test_checkpoint-4867",
                        help="the model checkpoint file.", )
     files.add_argument("--result_path", type=str, default="result/long",
                        help="The output directory where the model checkpoints and predictions will be written.", )
@@ -128,7 +128,7 @@ def add_train_args(parser):
                         )
     config.add_argument('--grad-clipping', type=float, default=10,
                         help='Gradient clipping')
-    config.add_argument('--weight-decay', type=float, default=0.001,
+    config.add_argument('--weight-decay', type=float, default=0.0001,
                         help='Weight decay factor')
     config.add_argument('--momentum', type=float, default=0.5,
                         help='Momentum factor')

@@ -78,8 +78,8 @@ class RWJDataSet(Dataset):
                     "cf_token": ex_token["cf_token"][fb:fb + f_num]
                 })
                 count += 1
-                if count == self.max_train_ex_num:
-                    return
+                # if count == self.max_train_ex_num:
+                #     return
 
     def __len__(self):
         return len(self.examples)
