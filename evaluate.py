@@ -10,11 +10,11 @@ logger = logging.getLogger()
 PREDICT_DIR = 'result/long'
 
 def add_predict_args(parser):
-    parser.add_argument('--predict-file', type=str, default='jump-N2-K10_checkpoint-190000jump-N2-K10.preds',
+    parser.add_argument('--predict-file', type=str, default='jump-N1-K10-noQ_checkpoint-220000jump-N1-K10-noQ.preds',
                     help='Prediction files')
     parser.add_argument('--predict-dir',type=str, default=PREDICT_DIR,
                     help='Directory for the prediction file')
-    parser.add_argument('--top-k', type=int, default=5,
+    parser.add_argument('--top-k', type=int, default=1,
                     help='Number of the selected paragraphs')
     # parser.add_argument('--log-dir', type=str, default='test.txt')
 

@@ -85,7 +85,7 @@ def add_train_args(parser):
     files.add_argument('--embedding-file', type=str,
                        default='glove.840B.300d.txt',
                        help='Space-separated pretrained embeddings file')
-    files.add_argument("--ckpt-file", type=str, default="mrl-test_checkpoint-4867",
+    files.add_argument("--ckpt-file", type=str, default="mrl-test_checkpoint-23064",
                        help="the model checkpoint file.", )
     files.add_argument("--result_path", type=str, default="result/long",
                        help="The output directory where the model checkpoints and predictions will be written.", )

@@ -99,7 +99,7 @@ class Ranker(nn.Module):
 class Jumper(nn.Module):
     def __init__(self, args):
         super(Jumper, self).__init__()
-        self.lstm = nn.LSTMCell(args.hidden_size * 2, args.hidden_size)
+        self.lstm = nn.LSTMCell(args.hidden_size, args.hidden_size)
         self.linear = nn.Linear(args.hidden_size, args.K + 1)
         self.baseline = nn.Linear(args.hidden_size, 1)
         self.mse_loss = nn.MSELoss()
@@ -120,14 +120,22 @@ class Jumper(nn.Module):
             Q_emb[idx].copy_(self.embeddings[questions[idx]])
         A_emb = torch.FloatTensor(batch_size, max_seq,
                                   self.args.hidden_size).zero_()  # ([batchsize, max_length, dim])
-        input_embs = torch.FloatTensor(batch_size, max_seq, self.args.hidden_size * 2).zero_()  # 将问题emb拼到文章每句话前面，送入LSTM
+        input_embs = torch.FloatTensor(batch_size, max_seq+1, self.args.hidden_size).zero_()  # 将问题emb拼到文章每句话前面，送入LSTM
 
         #
+        lengths = lengths + 1
+        # for idx in range(batch_size):
+        #     input_embs[idx][0].copy_(Q_emb[idx])
+        #     for l in range(max_seq):
+        #         A_emb[idx][l].copy_(self.embeddings[contexts[idx][l]])
+        #         if masks[idx][l] == 0:
+        #             input_embs[idx][l+1].copy_(A_emb[idx][l])
         for idx in range(batch_size):
             for l in range(max_seq):
-                A_emb[idx][l].copy_(self.embeddings[contexts[idx][l]])
                 if masks[idx][l] == 0:
-                    input_embs[idx][l].copy_(torch.cat((A_emb[idx][l], Q_emb[idx])))
+                    A_emb[idx][l].copy_(self.embeddings[contexts[idx][l]])
+            input_embs[idx].copy_(torch.cat((Q_emb[idx].unsqueeze(0),A_emb[idx])))
+
 
         input_embs = input_embs.transpose(0, 1)
         state = None
@@ -230,14 +238,22 @@ class Jumper(nn.Module):
             Q_emb[idx].copy_(self.embeddings[questions[idx]])
         A_emb = torch.FloatTensor(batch_size, max_seq,
                                   self.args.hidden_size).zero_()  # ([batchsize, max_length, dim])
-        input_embs = torch.FloatTensor(batch_size, max_seq, self.args.hidden_size * 2).zero_()  # 将问题emb拼到文章每句话下面，送入LSTM
+        input_embs = torch.FloatTensor(batch_size, max_seq+1, self.args.hidden_size).zero_()  # 将问题emb拼到文章每句话下面，送入LSTM
 
         #
+        lengths = lengths + 1
+        # for idx in range(batch_size):
+        #     input_embs[idx][0].copy_(Q_emb[idx])
+        #     for l in range(max_seq):
+        #         A_emb[idx][l].copy_(self.embeddings[contexts[idx][l]])
+        #         if masks[idx][l] == 0:
+        #             input_embs[idx][l+1].copy_(torch.cat((A_emb[idx][l], Q_emb[idx])))
+
         for idx in range(batch_size):
             for l in range(max_seq):
-                A_emb[idx][l].copy_(self.embeddings[contexts[idx][l]])
                 if masks[idx][l] == 0:
-                    input_embs[idx][l].copy_(torch.cat((A_emb[idx][l], Q_emb[idx])))
+                    A_emb[idx][l].copy_(self.embeddings[contexts[idx][l]])
+            input_embs[idx].copy_(torch.cat((Q_emb[idx].unsqueeze(0),A_emb[idx])))
         input_embs = input_embs.transpose(0, 1)
         state = None
         rows = torch.LongTensor(batch_size).zero_().to(self.args.device)  # 每个段落的第n个句子
